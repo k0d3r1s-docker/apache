@@ -1,0 +1,100 @@
+FROM    k0d3r1s/alpine:unstable
+
+COPY    ./src /usr/local/src/httpd-trunk
+COPY    run-httpd.sh /run-httpd.sh
+
+WORKDIR /usr/local/src
+
+RUN     \
+        apk upgrade --no-cache \
+&&      apk add --update --no-cache --upgrade -X http://dl-cdn.alpinelinux.org/alpine/edge/testing wget linux-headers git perl patch autoconf gcc g++ make \
+        cmake automake libtool file pkgconf libev libev-dev zlib zlib-dev python3 python3-dev expat expat-dev pcre pcre-dev \
+&&      git clone --depth 1 -b OpenSSL_1_1_1m+quic https://github.com/quictls/openssl /usr/local/src/openssl-master \
+&&      git clone https://github.com/ngtcp2/nghttp3 /usr/local/src/nghttp3-master \
+&&      git clone https://github.com/ngtcp2/ngtcp2 /usr/local/src/ngtcp2-master \
+&&      wget -O nghttp2.zip https://github.com/nghttp2/nghttp2/archive/master.zip \
+&&      wget -O apr.zip https://github.com/apache/apr/archive/trunk.zip \
+&&      wget -O /usr/bin/wait-for-it https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh \
+&&      unzip apr.zip \
+&&      unzip nghttp2.zip \
+&&      cp -r apr-trunk httpd-trunk/srclib/apr
+
+WORKDIR /usr/local/src/openssl-master
+
+RUN     \
+        ./config enable-tls1_3 \
+&&      make -j "$(expr $(nproc) / 2)" \
+&&      make install_sw \
+&&      make install
+
+WORKDIR /usr/local/src/nghttp3-master
+
+RUN     \
+        autoreconf -i \
+&&      ./configure \
+&&      make -j "$(expr $(nproc) / 2)" \
+&&      make install
+
+WORKDIR /usr/local/src/ngtcp2-master
+
+RUN     \
+        autoreconf -i \
+&&      ./configure \
+&&      make -j "$(expr $(nproc) / 2)" \
+&&      make install
+
+WORKDIR /usr/local/src/nghttp2-master
+
+RUN     \
+        autoreconf -i \
+&&      automake \
+&&      autoconf \
+&&      ./configure --with-neverbleed --enable-http3 \
+&&      make -j "$(expr $(nproc) / 2)" \
+&&      make install
+
+WORKDIR /usr/local/src/httpd-trunk
+
+RUN     \
+        ./buildconf \
+&&      ./configure --enable-ssl --enable-so --enable-http2 --with-mpm=event --with-included-apr \
+        --with-ssl=/usr/local --prefix=/usr/local/apache2 \
+&&      make -j "$(expr $(nproc) / 2)" \
+&&      make install
+
+WORKDIR /usr/local/src
+
+RUN     \
+        mkdir -p -m 755 /var/log/httpd \
+&&      mkdir -p -m 755 /usr/local/apache2/conf/conf.d \
+&&      ldconfig /usr/local/lib \
+&&      chmod -v +x /run-httpd.sh \
+&&      chmod +x /usr/bin/wait-for-it \
+&&      apk del --purge --no-cache linux-headers git perl patch autoconf gcc g++ make cmake automake libtool file pkgconf libev libev-dev zlib zlib-dev python3 python3-dev \
+        expat-dev pcre-dev liburing-dev \
+&&      rm -rf \
+            /tmp/* \
+            /usr/local/apache2/conf/extra/httpd-vhosts.conf \
+            /usr/local/apache2/conf/httpd.conf \
+            /usr/local/apache2/man \
+            /usr/local/apache2/manual \
+            /usr/local/share/doc \
+            /usr/local/share/man \
+            /usr/local/src \
+            /usr/share/doc \
+            /usr/share/man \
+            /var/cache/* \
+&&      chown -R vairogs:vairogs /var/log/httpd \
+&&      chown -R vairogs:vairogs /usr/local/apache2/logs
+
+COPY    httpd.conf modules.conf /usr/local/apache2/conf/
+COPY    www.conf /usr/local/apache2/conf/conf.d/www.conf
+
+WORKDIR /var/www/html
+
+EXPOSE  80
+EXPOSE  443
+
+CMD     ["/run-httpd.sh"]
+
+USER    vairogs
